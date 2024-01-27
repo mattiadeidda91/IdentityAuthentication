@@ -1,16 +1,18 @@
 using IdentityAuthentication.Abstractions.Models.Dto;
 using IdentityAuthentication.Dependencies.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IdentityAuthentication.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [AllowAnonymous]
     public class AuthController : ControllerBase
     {
         private readonly IIdentityService identityService;
 
-        public AuthController(ILogger<AuthController> logger, IIdentityService identityService)
+        public AuthController(IIdentityService identityService)
         {
             this.identityService = identityService;
         }
@@ -29,8 +31,6 @@ namespace IdentityAuthentication.Controllers
         [HttpPost("register")]
         public async Task<IActionResult> Register(RegisterRequestDto registerRequest)
         {
-            var valid = ModelState.IsValid;
-
             var registerResponse = await identityService.RegisterAsync(registerRequest);
 
             return StatusCode(registerResponse.Success ? StatusCodes.Status200OK : StatusCodes.Status400BadRequest, 

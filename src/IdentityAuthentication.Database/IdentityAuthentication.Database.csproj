@@ -10,4 +10,8 @@
     <ProjectReference Include="..\IdentityAuthentication.Abstractions\IdentityAuthentication.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Scripts\" />
+  </ItemGroup>
+
 </Project>
