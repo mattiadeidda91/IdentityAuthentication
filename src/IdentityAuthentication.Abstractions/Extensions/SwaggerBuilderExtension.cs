@@ -11,8 +11,8 @@ namespace IdentityAuthentication.Abstractions.Extensions
         {
             services.AddSwaggerGen(options =>
             {
-                //options.SwaggerDoc("v1", new OpenApiInfo { Title = "IdentityAuthentication", Version = "v1" });
-                //options.EnableAnnotations();
+                options.SwaggerDoc("v1", new OpenApiInfo { Title = "IdentityAuthentication", Version = "v1" });
+                options.EnableAnnotations();
                 options.AddSecurityDefinition(JwtBearerDefaults.AuthenticationScheme, new OpenApiSecurityScheme
                 {
                     Name = HeaderNames.Authorization,
