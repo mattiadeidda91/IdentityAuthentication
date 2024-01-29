@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace IdentityAuthentication.Dependencies.Services
@@ -24,16 +25,16 @@ namespace IdentityAuthentication.Dependencies.Services
             this.signInManager = signInManager;
         }
 
-        public async Task<LoginResponseDto?> LoginAsync(LoginRequestDto registerRequestDto)
+        public async Task<LoginResponseDto?> LoginAsync(LoginRequestDto loginRequestDto)
         {
-            var loginResponse = await signInManager.PasswordSignInAsync(registerRequestDto.Username, registerRequestDto.Password, false, false);
+            var loginResponse = await signInManager.PasswordSignInAsync(loginRequestDto.Username, loginRequestDto.Password, false, false);
             
             if (!loginResponse.Succeeded)
             {
                 return null;
             }
 
-            var user = await userManager.FindByNameAsync(registerRequestDto.Username);
+            var user = await userManager.FindByNameAsync(loginRequestDto.Username);
             var userRoles = await userManager.GetRolesAsync(user);
 
             var claims = new List<Claim>()
@@ -44,9 +45,52 @@ namespace IdentityAuthentication.Dependencies.Services
                 new Claim(ClaimTypes.GivenName, user.FirstName!),
                 new Claim(ClaimTypes.Surname, user.LastName ?? string.Empty),
             }
-            .Union(userRoles.Select(role => new Claim(ClaimTypes.Role, role))).ToList();
+            .Union(userRoles.Select(role => new Claim(ClaimTypes.Role, role)))
+            .ToList();
 
-            return GenerateToken(claims);
+            var loginResult = GenerateToken(claims);
+
+            //Save Refresh token properties to DB
+            user.RefreshToken= loginResult.RefreshToken;
+            user.RefreshTokenExpirationDate = DateTime.UtcNow.AddMinutes(jwtOptions.RefreshTokenExpirationMinutes);
+
+            _ = await userManager.UpdateAsync(user);
+
+            return loginResult;
+        }
+
+        public async Task<LoginResponseDto> RefreshTokenAsync(RefreshTokenRequestDto refreshTokenRequestDto)
+        {
+            var tokenValidation = await ValidateAccessToken(refreshTokenRequestDto.Token!);
+
+            if (tokenValidation != null && tokenValidation.IsValid)
+            {
+                var userId = tokenValidation.ClaimsIdentity.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+                if(!string.IsNullOrEmpty(userId))
+                {
+                    var user = await userManager.FindByIdAsync(userId);
+
+                    //Check token values to DB
+                    if(user?.RefreshToken == null || 
+                        user?.RefreshTokenExpirationDate < DateTime.UtcNow || 
+                        user?.RefreshToken != refreshTokenRequestDto.RefreshToken)
+                    {
+                        return null;
+                    }
+
+                    var loginResponse = GenerateToken(tokenValidation.ClaimsIdentity.Claims);
+
+                    user!.RefreshToken = loginResponse.RefreshToken;
+                    user.RefreshTokenExpirationDate = DateTime.UtcNow.AddMinutes(jwtOptions.RefreshTokenExpirationMinutes);
+
+                    _ = await userManager.UpdateAsync(user);
+
+                    return loginResponse;
+                }
+            }
+
+            return null;
         }
 
         public async Task<RegisterResponseDto> RegisterAsync(RegisterRequestDto registerRequestDto)
@@ -61,9 +105,10 @@ namespace IdentityAuthentication.Dependencies.Services
 
             var createdResult = await userManager.CreateAsync(user, registerRequestDto.Password);
 
-            if(createdResult.Succeeded)
+            if (createdResult.Succeeded)
             {
                 _ = await userManager.AddToRoleAsync(user, CustomRoles.User); //Default Registration Role
+                //_ = await userManager.AddClaimsAsync(user, claims); //Default Registration Claims
             }
 
             return new RegisterResponseDto
@@ -73,7 +118,33 @@ namespace IdentityAuthentication.Dependencies.Services
             };
         }
 
-        private LoginResponseDto GenerateToken(IList<Claim> claims)
+        private async Task<TokenValidationResult> ValidateAccessToken(string token)
+        {
+            var tokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = jwtOptions.Issuer,
+                ValidateAudience = true,
+                ValidAudience = jwtOptions.Audience,
+                ValidateLifetime = false, // set false to allow access to the user without checking the token expiration
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Signature!)),
+                RequireExpirationTime = true,
+                ClockSkew = TimeSpan.FromMinutes(5)
+            };
+
+            var tokenValidation = await new JwtSecurityTokenHandler().ValidateTokenAsync(token, tokenValidationParameters);
+
+            ////Check if token is our jwt token with our roles and Alg
+            //if(tokenValidation.SecurityToken is JwtSecurityToken jwtSecurityToken && jwtSecurityToken.Header.Alg == SecurityAlgorithms.HmacSha256Signature)
+            //{
+            //    return tokenValidation?.IsValid ?? false;
+            //}
+
+            return tokenValidation;
+        }
+
+        private LoginResponseDto GenerateToken(IEnumerable<Claim> claims)
         {
             var symmetricSignature = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Signature!));
             var signingCredentials = new SigningCredentials(symmetricSignature, SecurityAlgorithms.HmacSha256Signature);
@@ -83,12 +154,25 @@ namespace IdentityAuthentication.Dependencies.Services
                 jwtOptions.Audience, 
                 claims, 
                 DateTime.UtcNow, 
-                DateTime.UtcNow.AddDays(10), 
+                DateTime.UtcNow.AddMinutes(jwtOptions.AccessTokenExpirationMinutes),
                 signingCredentials);
 
             var token = new JwtSecurityTokenHandler().WriteToken(securityToken);
 
-            return new LoginResponseDto { Token = token };
+            return new LoginResponseDto 
+            { 
+                Token = token, 
+                RefreshToken = GenerateRefreshToken() 
+            };
+        }
+
+        private string GenerateRefreshToken()
+        {
+            var randomNumber = new byte[256];
+            using var generator = RandomNumberGenerator.Create();
+            generator.GetBytes(randomNumber);
+
+            return Convert.ToBase64String(randomNumber);
         }
     }
 }

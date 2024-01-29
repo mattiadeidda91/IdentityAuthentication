@@ -4,8 +4,12 @@ using IdentityAuthentication.Abstractions.Extensions;
 using IdentityAuthentication.Abstractions.Models.Entities;
 using IdentityAuthentication.Database.DbContext;
 using IdentityAuthentication.Dependencies.Services;
+using IdentityAuthentication.Filters;
+using IdentityAuthentication.Requirements;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -14,6 +18,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 //Services
 builder.Services.AddScoped<IIdentityService, IdentityService>();
+builder.Services.AddScoped<IAuthorizationHandler, UserActiveHandler>();
+
+//Hosted Service
+builder.Services.AddHostedService<AuthenticationHostService>();
 
 //Options
 var jwtSection = builder.Configuration.GetSection(nameof(JwtOptions));
@@ -40,9 +48,6 @@ builder.Services.AddIdentity<ApplicationUser, ApplicationRole>(options =>
 .AddEntityFrameworkStores<AuthenticationDbContext>()
 .AddDefaultTokenProviders(); //objects to generate token for reset/change password
 
-//Hosted Service
-builder.Services.AddHostedService<AuthenticationHostService>();
-
 builder.Services.AddControllers();
 
 //Jwt Auth
@@ -61,18 +66,25 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = jwtOptions.Issuer,
         ValidateAudience = true,
         ValidAudience = jwtOptions.Audience,
-        ValidateLifetime = true,
+        ValidateLifetime = true, //Validate token expiration
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Signature!)),
         RequireExpirationTime = true,
-        ClockSkew = TimeSpan.FromMinutes(5) //The Default is 5 minutes
+        ClockSkew = TimeSpan.FromMinutes(5) //The Default is 5 minutes, Token is valid for 5 mins after expiration
     };
 });
 
 builder.Services.AddAuthorization(options =>
 {
-    //All controllers require authorized user
-    options.FallbackPolicy = options.DefaultPolicy; 
+    //All controllers require authorized user and custom Requirement (Not locked User) -> NOT WORKING
+    var policyBuilder = new AuthorizationPolicyBuilder().RequireAuthenticatedUser();
+    policyBuilder.Requirements.Add(new UserActiveRequirement());
+    options.FallbackPolicy = options.DefaultPolicy = policyBuilder.Build();
+
+    options.AddPolicy("UserActive", policy =>
+    {
+        policy.Requirements.Add(new UserActiveRequirement());
+    });
 });
 
 //Swagger
@@ -81,6 +93,15 @@ builder.Services.SwaggerBuild();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+//Add global Filters
+builder.Services.AddControllersWithViews(options =>
+{
+    //Set global authorize policy
+    options.Filters.Add(new AuthorizeFilter("UserActive"));
+    //Set global filter
+    options.Filters.Add<TrackFilter>();
+});
 
 var app = builder.Build();
 
@@ -92,7 +113,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
 
 //app.UseCors(options =>
 //{

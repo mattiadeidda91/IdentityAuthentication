@@ -28,6 +28,17 @@ namespace IdentityAuthentication.Controllers
                 return BadRequest();
         }
 
+        [HttpPost("refresh")]
+        public async Task<IActionResult> RefreshToken(RefreshTokenRequestDto refreshTokenRequest)
+        {
+            var loginResponse = await identityService.RefreshTokenAsync(refreshTokenRequest);
+
+            if (loginResponse != null)
+                return Ok(loginResponse);
+            else
+                return BadRequest();
+        }
+
         [HttpPost("register")]
         public async Task<IActionResult> Register(RegisterRequestDto registerRequest)
         {
